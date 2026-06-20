@@ -21,17 +21,6 @@ CHANNELS = [
     {"broadcaster": "CBS", "name": "CBS 표준FM", "id": "cbs.standardfm", "frequency": "98.1MHz"},
     {"broadcaster": "CBS", "name": "CBS 음악FM", "id": "cbs.musicfm", "frequency": "93.9MHz"},
     {"broadcaster": "CBS", "name": "CBS JOY4U", "id": "cbs.joy4u", "frequency": ""},
-    # TV
-    {"broadcaster": "KBS", "name": "KBS 1TV", "id": "kbs.1tv", "frequency": ""},
-    {"broadcaster": "KBS", "name": "KBS 2TV", "id": "kbs.2tv", "frequency": ""},
-    {"broadcaster": "MBC", "name": "MBC TV", "id": "mbc.tv", "frequency": ""},
-    {"broadcaster": "SBS", "name": "SBS TV", "id": "sbs.tv", "frequency": ""},
-    {"broadcaster": "EBS", "name": "EBS 1TV", "id": "ebs.1tv", "frequency": ""},
-    {"broadcaster": "tvN", "name": "tvN", "id": "tvn", "frequency": ""},
-    {"broadcaster": "JTBC", "name": "JTBC", "id": "jtbc", "frequency": ""},
-    {"broadcaster": "TV조선", "name": "TV조선", "id": "tvchosun", "frequency": ""},
-    {"broadcaster": "채널A", "name": "채널A", "id": "channela", "frequency": ""},
-    {"broadcaster": "MBN", "name": "MBN", "id": "mbn", "frequency": ""},
 ]
 
 BATCH_SIZE = 6  # 한 번에 요청할 채널 수
@@ -223,9 +212,9 @@ def generate_index(today_str):
     )
     html = f"""<!DOCTYPE html>
 <html lang="ko">
-<head><meta charset="UTF-8"><title>한국 방송 편성표 EPG</title></head>
+<head><meta charset="UTF-8"><title>한국 라디오 편성표 EPG</title></head>
 <body>
-  <h1>한국 방송 편성표 EPG</h1>
+  <h1>한국 라디오 편성표 EPG</h1>
   <p>기준일: {today_str} | <a href="radio.xml">전체 XMLTV 다운로드</a></p>
   <h2>채널별</h2>
   <ul>
