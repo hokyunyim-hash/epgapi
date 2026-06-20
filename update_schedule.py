@@ -34,17 +34,14 @@ CHANNELS = [
     {"broadcaster": "MBN", "name": "MBN", "id": "mbn", "frequency": ""},
 ]
 
+BATCH_SIZE = 6  # 한 번에 요청할 채널 수
+
 
 def fix_xml_entities(xml_content):
-    """태그 밖의 & 를 &amp; 로 치환하고 DOCTYPE을 제거해 파싱 안전하게 만듦"""
-    # DOCTYPE 제거 (외부 DTD 참조 파싱 오류 방지)
     xml_content = re.sub(r'<!DOCTYPE[^>]*>', '', xml_content)
 
-    # 태그 속성값과 텍스트 노드에서 이스케이프되지 않은 & 수정
-    # 태그 바깥 텍스트의 & → &amp; (이미 &amp; &lt; &gt; &quot; &apos; 인 것은 제외)
     def replace_bare_ampersand(m):
         s = m.group(0)
-        # 이미 올바른 엔티티면 그대로
         if re.match(r'&(amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);', s):
             return s
         return '&amp;'
@@ -54,13 +51,69 @@ def fix_xml_entities(xml_content):
 
 
 def validate_xml(xml_content):
-    """XML 파싱 유효성 검사"""
     try:
         ET.fromstring(xml_content.encode('utf-8'))
         return True
     except ET.ParseError as e:
         print(f"XML 유효성 오류: {e}")
         return False
+
+
+def fetch_batch(client, channels_batch, today_str):
+    """채널 배치에 대한 XMLTV 데이터를 Gemini로 가져옴"""
+    channel_list = "\n".join(
+        f"   - {ch['broadcaster']}: {ch['name']}" + (f" ({ch['frequency']})" if ch['frequency'] else "")
+        for ch in channels_batch
+    )
+    id_mapping = "\n".join(f"   {ch['name']} -> {ch['id']}" for ch in channels_batch)
+    date_nodash = today_str.replace('-', '')
+
+    prompt = f"""
+    대한민국 방송 편성표를 XMLTV 형식으로 변환하는 로봇입니다.
+
+    오늘 날짜({today_str}) 기준으로 아래 채널들의 24시간 편성표를 웹 검색으로 수집하세요:
+{channel_list}
+
+    규칙:
+    - '<?xml'로 시작하고 '</tv>'로 끝나는 XML만 출력 (마크다운 금지)
+    - XML 내 특수문자(&)는 &amp; 로 이스케이프
+    - 채널 id 매핑:
+{id_mapping}
+
+    포맷:
+    <?xml version="1.0" encoding="UTF-8"?>
+    <tv date="{date_nodash}">
+      <channel id="CHANNEL_ID"><display-name lang="ko">채널명</display-name></channel>
+      <programme start="{date_nodash}060000 +0900" stop="{date_nodash}070000 +0900" channel="CHANNEL_ID">
+        <title lang="ko">프로그램명</title>
+      </programme>
+    </tv>
+
+    start/stop: YYYYMMDDHHmmss +0900, stop은 다음 프로그램 start와 동일.
+    """
+
+    response = client.models.generate_content(
+        model='gemini-2.5-flash',
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            tools=[{"google_search": {}}],
+            temperature=0.1,
+        )
+    )
+
+    xml = response.text.strip()
+    if xml.startswith("```xml"):
+        xml = xml.split("```xml")[1].split("```")[0].strip()
+    elif xml.startswith("```"):
+        xml = xml.split("```")[1].split("```")[0].strip()
+
+    return xml
+
+
+def extract_inner(xml_content):
+    """<tv> 태그 안의 내용만 추출"""
+    match = re.search(r'<tv[^>]*>(.*)</tv>', xml_content, re.DOTALL)
+    return match.group(1).strip() if match else ""
 
 
 def generate_radio_xml():
@@ -71,114 +124,81 @@ def generate_radio_xml():
 
     client = genai.Client(api_key=api_key)
     today_str = datetime.today().strftime('%Y-%m-%d')
+    date_nodash = today_str.replace('-', '')
     os.makedirs("public", exist_ok=True)
 
-    channel_list = "\n".join(
-        f"       - {ch['broadcaster']}: {ch['name']}" + (f" ({ch['frequency']})" if ch['frequency'] else "")
-        for ch in CHANNELS
-    )
+    # 배치 분할
+    batches = [CHANNELS[i:i+BATCH_SIZE] for i in range(0, len(CHANNELS), BATCH_SIZE)]
+    print(f"총 {len(CHANNELS)}개 채널을 {len(batches)}개 배치로 분할 처리")
 
-    prompt = f"""
-    당신은 대한민국 방송 편성표를 XMLTV 표준 형식으로 변환하는 데이터 엔지니어 로봇입니다.
+    all_inner = []
+    for i, batch in enumerate(batches):
+        names = ", ".join(ch['name'] for ch in batch)
+        print(f"배치 {i+1}/{len(batches)}: {names}")
+        try:
+            xml = fetch_batch(client, batch, today_str)
+            xml = fix_xml_entities(xml)
+            inner = extract_inner(xml)
+            if inner:
+                all_inner.append(inner)
+            else:
+                print(f"  경고: 배치 {i+1} 결과 없음, 건너뜀")
+        except Exception as e:
+            print(f"  배치 {i+1} 오류 (건너뜀): {e}")
 
-    1. 오늘 날짜({today_str}) 기준으로 아래 채널들의 24시간 전체 편성표를 웹 검색으로 수집하세요:
-{channel_list}
-
-    2. XMLTV 표준 포맷으로 출력하세요. 반드시 '<?xml'로 시작하고 '</tv>'로 끝나야 합니다.
-    3. 마크다운 기호(```xml 등)나 설명 텍스트를 절대 포함하지 마세요.
-    4. XML 텍스트 내에 특수문자(&, <, >, ", ')가 있으면 반드시 XML 엔티티(&amp; &lt; &gt; &quot; &apos;)로 이스케이프하세요.
-    5. 각 채널의 id는 아래 매핑을 사용하세요:
-{chr(10).join(f"       {ch['name']} -> {ch['id']}" for ch in CHANNELS)}
-
-    6. XMLTV 포맷 예시:
-    <?xml version="1.0" encoding="UTF-8"?>
-    <tv date="{today_str.replace('-','')}">
-      <channel id="kbs.1radio">
-        <display-name lang="ko">KBS 제1라디오</display-name>
-      </channel>
-      <programme start="20260620060000 +0900" stop="20260620070000 +0900" channel="kbs.1radio">
-        <title lang="ko">프로그램명</title>
-        <desc lang="ko">프로그램 설명</desc>
-      </programme>
-    </tv>
-
-    7. start/stop 시간 형식: YYYYMMDDHHmmss +0900 (KST)
-    8. stop 시간은 다음 프로그램 start 시간과 동일하게 설정하세요.
-    9. 모든 채널을 포함하세요.
-    """
-
-    print(f"Gemini API 호출 중... ({len(CHANNELS)}개 채널)")
-
-    try:
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                tools=[{"google_search": {}}],
-                temperature=0.1,
-            )
-        )
-
-        xml_content = response.text.strip()
-
-        if xml_content.startswith("```xml"):
-            xml_content = xml_content.split("```xml")[1].split("```")[0].strip()
-        elif xml_content.startswith("```"):
-            xml_content = xml_content.split("```")[1].split("```")[0].strip()
-
-        if not xml_content.startswith("<?xml"):
-            raise ValueError("유효하지 않은 XML 응답")
-
-        # 특수문자 정제
-        xml_content = fix_xml_entities(xml_content)
-
-        # 유효성 검증
-        if not validate_xml(xml_content):
-            raise ValueError("XML 파싱 실패 - 유효하지 않은 XML")
-
-        history_dir = os.path.join("public", "history")
-        os.makedirs(history_dir, exist_ok=True)
-        history_path = os.path.join(history_dir, f"radio-{today_str}.xml")
-
-        xml_path = os.path.join("public", "radio.xml")
-
-        if os.path.exists(xml_path):
-            shutil.copy2(xml_path, os.path.join("public", "radio.backup.xml"))
-
-        with open(xml_path, "w", encoding="utf-8") as f:
-            f.write(xml_content)
-
-        with open(history_path, "w", encoding="utf-8") as f:
-            f.write(xml_content)
-
-        channels_dir = os.path.join("public", "channels")
-        os.makedirs(channels_dir, exist_ok=True)
-        generate_channel_files(xml_content, channels_dir, today_str)
-
-        generate_index(today_str)
-
-        print(f"성공: {xml_path} 저장 완료")
-        print(f"히스토리: {history_path} 저장 완료")
-
-    except Exception as e:
-        print(f"오류 발생: {e}")
-        backup = os.path.join("public", "radio.backup.xml")
-        if os.path.exists(backup):
-            shutil.copy2(backup, os.path.join("public", "radio.xml"))
-            print("이전 데이터로 복구했습니다.")
+    if not all_inner:
+        print("오류: 모든 배치 실패")
+        _restore_backup()
         sys.exit(1)
+
+    # 전체 XML 합치기
+    xml_content = f'<?xml version="1.0" encoding="UTF-8"?>\n<tv date="{date_nodash}">\n'
+    xml_content += "\n".join(all_inner)
+    xml_content += "\n</tv>"
+
+    if not validate_xml(xml_content):
+        print("오류: 합친 XML 유효성 검증 실패")
+        _restore_backup()
+        sys.exit(1)
+
+    _save(xml_content, today_str)
+
+
+def _restore_backup():
+    backup = os.path.join("public", "radio.backup.xml")
+    if os.path.exists(backup):
+        shutil.copy2(backup, os.path.join("public", "radio.xml"))
+        print("이전 데이터로 복구했습니다.")
+
+
+def _save(xml_content, today_str):
+    xml_path = os.path.join("public", "radio.xml")
+    history_dir = os.path.join("public", "history")
+    os.makedirs(history_dir, exist_ok=True)
+
+    if os.path.exists(xml_path):
+        shutil.copy2(xml_path, os.path.join("public", "radio.backup.xml"))
+
+    with open(xml_path, "w", encoding="utf-8") as f:
+        f.write(xml_content)
+
+    with open(os.path.join(history_dir, f"radio-{today_str}.xml"), "w", encoding="utf-8") as f:
+        f.write(xml_content)
+
+    channels_dir = os.path.join("public", "channels")
+    os.makedirs(channels_dir, exist_ok=True)
+    generate_channel_files(xml_content, channels_dir, today_str)
+    generate_index(today_str)
+
+    print(f"성공: {xml_path} 저장 완료")
 
 
 def generate_channel_files(xml_content, channels_dir, today_str):
     try:
         for ch in CHANNELS:
             cid = ch['id']
-            channel_def = re.findall(
-                rf'<channel id="{re.escape(cid)}".*?</channel>', xml_content, re.DOTALL
-            )
-            programmes = re.findall(
-                rf'<programme[^>]+channel="{re.escape(cid)}".*?</programme>', xml_content, re.DOTALL
-            )
+            channel_def = re.findall(rf'<channel id="{re.escape(cid)}".*?</channel>', xml_content, re.DOTALL)
+            programmes = re.findall(rf'<programme[^>]+channel="{re.escape(cid)}".*?</programme>', xml_content, re.DOTALL)
             if not programmes:
                 continue
 
