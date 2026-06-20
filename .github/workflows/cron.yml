@@ -11,8 +11,6 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
-        env:
-          ACTIONS_RUNNER_FORCE_ACTIONS_NODE_VERSION: node20
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -37,3 +35,5 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           projectName: 'radio-schedule'
           directory: 'public'
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+          wranglerVersion: '3'
