@@ -1,7 +1,9 @@
 import os
 import sys
 import shutil
+import re
 from datetime import datetime
+from xml.etree import ElementTree as ET
 from google import genai
 from google.genai import types
 
@@ -32,6 +34,35 @@ CHANNELS = [
     {"broadcaster": "MBN", "name": "MBN", "id": "mbn", "frequency": ""},
 ]
 
+
+def fix_xml_entities(xml_content):
+    """태그 밖의 & 를 &amp; 로 치환하고 DOCTYPE을 제거해 파싱 안전하게 만듦"""
+    # DOCTYPE 제거 (외부 DTD 참조 파싱 오류 방지)
+    xml_content = re.sub(r'<!DOCTYPE[^>]*>', '', xml_content)
+
+    # 태그 속성값과 텍스트 노드에서 이스케이프되지 않은 & 수정
+    # 태그 바깥 텍스트의 & → &amp; (이미 &amp; &lt; &gt; &quot; &apos; 인 것은 제외)
+    def replace_bare_ampersand(m):
+        s = m.group(0)
+        # 이미 올바른 엔티티면 그대로
+        if re.match(r'&(amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);', s):
+            return s
+        return '&amp;'
+
+    xml_content = re.sub(r'&(?:[^;]{0,10})?', replace_bare_ampersand, xml_content)
+    return xml_content
+
+
+def validate_xml(xml_content):
+    """XML 파싱 유효성 검사"""
+    try:
+        ET.fromstring(xml_content.encode('utf-8'))
+        return True
+    except ET.ParseError as e:
+        print(f"XML 유효성 오류: {e}")
+        return False
+
+
 def generate_radio_xml():
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
@@ -55,12 +86,12 @@ def generate_radio_xml():
 
     2. XMLTV 표준 포맷으로 출력하세요. 반드시 '<?xml'로 시작하고 '</tv>'로 끝나야 합니다.
     3. 마크다운 기호(```xml 등)나 설명 텍스트를 절대 포함하지 마세요.
-    4. 각 채널의 id는 아래 매핑을 사용하세요:
+    4. XML 텍스트 내에 특수문자(&, <, >, ", ')가 있으면 반드시 XML 엔티티(&amp; &lt; &gt; &quot; &apos;)로 이스케이프하세요.
+    5. 각 채널의 id는 아래 매핑을 사용하세요:
 {chr(10).join(f"       {ch['name']} -> {ch['id']}" for ch in CHANNELS)}
 
-    5. XMLTV 포맷 예시:
+    6. XMLTV 포맷 예시:
     <?xml version="1.0" encoding="UTF-8"?>
-    <!DOCTYPE tv SYSTEM "xmltv.dtd">
     <tv date="{today_str.replace('-','')}">
       <channel id="kbs.1radio">
         <display-name lang="ko">KBS 제1라디오</display-name>
@@ -71,9 +102,9 @@ def generate_radio_xml():
       </programme>
     </tv>
 
-    6. start/stop 시간 형식: YYYYMMDDHHmmss +0900 (KST)
-    7. stop 시간은 다음 프로그램 start 시간과 동일하게 설정하세요.
-    8. 모든 채널을 포함하세요.
+    7. start/stop 시간 형식: YYYYMMDDHHmmss +0900 (KST)
+    8. stop 시간은 다음 프로그램 start 시간과 동일하게 설정하세요.
+    9. 모든 채널을 포함하세요.
     """
 
     print(f"Gemini API 호출 중... ({len(CHANNELS)}개 채널)")
@@ -97,6 +128,13 @@ def generate_radio_xml():
 
         if not xml_content.startswith("<?xml"):
             raise ValueError("유효하지 않은 XML 응답")
+
+        # 특수문자 정제
+        xml_content = fix_xml_entities(xml_content)
+
+        # 유효성 검증
+        if not validate_xml(xml_content):
+            raise ValueError("XML 파싱 실패 - 유효하지 않은 XML")
 
         history_dir = os.path.join("public", "history")
         os.makedirs(history_dir, exist_ok=True)
@@ -133,7 +171,6 @@ def generate_radio_xml():
 
 def generate_channel_files(xml_content, channels_dir, today_str):
     try:
-        import re
         for ch in CHANNELS:
             cid = ch['id']
             channel_def = re.findall(
