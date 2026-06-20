@@ -2,7 +2,7 @@ name: Daily Radio Schedule XML Generator
 
 on:
   schedule:
-    - cron: '0 20 * * *'  # UTC 20:00 = KST 05:00
+    - cron: '0 20 * * *'
   workflow_dispatch:
 
 jobs:
@@ -11,6 +11,8 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+        env:
+          ACTIONS_RUNNER_FORCE_ACTIONS_NODE_VERSION: node20
 
       - name: Set up Python
         uses: actions/setup-python@v5
