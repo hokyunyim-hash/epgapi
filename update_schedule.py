@@ -1,8 +1,36 @@
 import os
 import sys
+import shutil
 from datetime import datetime
 from google import genai
 from google.genai import types
+
+CHANNELS = [
+    # 라디오
+    {"broadcaster": "KBS", "name": "KBS 제1라디오", "id": "kbs.1radio", "frequency": "711kHz"},
+    {"broadcaster": "KBS", "name": "KBS 제2라디오 해피FM", "id": "kbs.2radio", "frequency": "106.1MHz"},
+    {"broadcaster": "KBS", "name": "KBS 클래식FM", "id": "kbs.classicfm", "frequency": "93.1MHz"},
+    {"broadcaster": "KBS", "name": "KBS Cool FM", "id": "kbs.coolfm", "frequency": "89.1MHz"},
+    {"broadcaster": "KBS", "name": "KBS 제3라디오", "id": "kbs.3radio", "frequency": "104.9MHz"},
+    {"broadcaster": "SBS", "name": "SBS 러브FM", "id": "sbs.lovefm", "frequency": "103.5MHz"},
+    {"broadcaster": "SBS", "name": "SBS 파워FM", "id": "sbs.powerfm", "frequency": "107.7MHz"},
+    {"broadcaster": "MBC", "name": "MBC 표준FM", "id": "mbc.standardfm", "frequency": "95.9MHz"},
+    {"broadcaster": "MBC", "name": "MBC FM4U", "id": "mbc.fm4u", "frequency": "91.9MHz"},
+    {"broadcaster": "CBS", "name": "CBS 표준FM", "id": "cbs.standardfm", "frequency": "98.1MHz"},
+    {"broadcaster": "CBS", "name": "CBS 음악FM", "id": "cbs.musicfm", "frequency": "93.9MHz"},
+    {"broadcaster": "CBS", "name": "CBS JOY4U", "id": "cbs.joy4u", "frequency": ""},
+    # TV
+    {"broadcaster": "KBS", "name": "KBS 1TV", "id": "kbs.1tv", "frequency": ""},
+    {"broadcaster": "KBS", "name": "KBS 2TV", "id": "kbs.2tv", "frequency": ""},
+    {"broadcaster": "MBC", "name": "MBC TV", "id": "mbc.tv", "frequency": ""},
+    {"broadcaster": "SBS", "name": "SBS TV", "id": "sbs.tv", "frequency": ""},
+    {"broadcaster": "EBS", "name": "EBS 1TV", "id": "ebs.1tv", "frequency": ""},
+    {"broadcaster": "tvN", "name": "tvN", "id": "tvn", "frequency": ""},
+    {"broadcaster": "JTBC", "name": "JTBC", "id": "jtbc", "frequency": ""},
+    {"broadcaster": "TV조선", "name": "TV조선", "id": "tvchosun", "frequency": ""},
+    {"broadcaster": "채널A", "name": "채널A", "id": "channela", "frequency": ""},
+    {"broadcaster": "MBN", "name": "MBN", "id": "mbn", "frequency": ""},
+]
 
 def generate_radio_xml():
     api_key = os.environ.get("GEMINI_API_KEY")
@@ -12,22 +40,43 @@ def generate_radio_xml():
 
     client = genai.Client(api_key=api_key)
     today_str = datetime.today().strftime('%Y-%m-%d')
+    os.makedirs("public", exist_ok=True)
+
+    channel_list = "\n".join(
+        f"       - {ch['broadcaster']}: {ch['name']}" + (f" ({ch['frequency']})" if ch['frequency'] else "")
+        for ch in CHANNELS
+    )
 
     prompt = f"""
-    당신은 대한민국 라디오 방송국 편성표를 수집하여 제공하는 데이터 엔지니어 로봇입니다.
+    당신은 대한민국 방송 편성표를 XMLTV 표준 형식으로 변환하는 데이터 엔지니어 로봇입니다.
 
-    1. 오늘 날짜({today_str}) 기준으로 아래 11개 라디오 채널의 24시간 주중 평일 전체 편성표 데이터를 웹 검색(Google Search Grounding) 기능을 활용하여 수집하세요.
-       - KBS: 제1라디오, 제2라디오(해피FM), 클래식FM, Cool FM, 제3라디오
-       - SBS: 러브FM, 파워FM
-       - MBC: 표준FM, FM4U
-       - CBS: 표준FM, 음악FM
+    1. 오늘 날짜({today_str}) 기준으로 아래 채널들의 24시간 전체 편성표를 웹 검색으로 수집하세요:
+{channel_list}
 
-    2. 수집한 모든 타임라인 데이터를 유효한 XML 구조로 완벽하게 포맷팅하여 텍스트로만 반환하세요.
-    3. 마크다운 기호(예: ```xml)나 앞뒤 설명 멘트를 절대 포함하지 마십시오. 오직 '<?xml'로 시작해서 '</radioSchedules>'로 끝나는 내용만 출력해야 합니다.
-    4. XML 구조는 <radioSchedules date="{today_str}">을 루트로 하고, 내부에 <broadcaster name="..."> -> <channel name="..." frequency="..."> -> <program> 구조로 정리하세요. 각 프로그램은 <startTime>, <title> 요소를 반드시 가져야 합니다.
+    2. XMLTV 표준 포맷으로 출력하세요. 반드시 '<?xml'로 시작하고 '</tv>'로 끝나야 합니다.
+    3. 마크다운 기호(```xml 등)나 설명 텍스트를 절대 포함하지 마세요.
+    4. 각 채널의 id는 아래 매핑을 사용하세요:
+{chr(10).join(f"       {ch['name']} -> {ch['id']}" for ch in CHANNELS)}
+
+    5. XMLTV 포맷 예시:
+    <?xml version="1.0" encoding="UTF-8"?>
+    <!DOCTYPE tv SYSTEM "xmltv.dtd">
+    <tv date="{today_str.replace('-','')}">
+      <channel id="kbs.1radio">
+        <display-name lang="ko">KBS 제1라디오</display-name>
+      </channel>
+      <programme start="20260620060000 +0900" stop="20260620070000 +0900" channel="kbs.1radio">
+        <title lang="ko">프로그램명</title>
+        <desc lang="ko">프로그램 설명</desc>
+      </programme>
+    </tv>
+
+    6. start/stop 시간 형식: YYYYMMDDHHmmss +0900 (KST)
+    7. stop 시간은 다음 프로그램 start 시간과 동일하게 설정하세요.
+    8. 모든 채널을 포함하세요.
     """
 
-    print("Gemini API 호출 및 실시간 웹 검색 기반 XML 생성 시작...")
+    print(f"Gemini API 호출 중... ({len(CHANNELS)}개 채널)")
 
     try:
         response = client.models.generate_content(
@@ -46,17 +95,92 @@ def generate_radio_xml():
         elif xml_content.startswith("```"):
             xml_content = xml_content.split("```")[1].split("```")[0].strip()
 
-        os.makedirs("public", exist_ok=True)
+        if not xml_content.startswith("<?xml"):
+            raise ValueError("유효하지 않은 XML 응답")
+
+        history_dir = os.path.join("public", "history")
+        os.makedirs(history_dir, exist_ok=True)
+        history_path = os.path.join(history_dir, f"radio-{today_str}.xml")
+
         xml_path = os.path.join("public", "radio.xml")
+
+        if os.path.exists(xml_path):
+            shutil.copy2(xml_path, os.path.join("public", "radio.backup.xml"))
 
         with open(xml_path, "w", encoding="utf-8") as f:
             f.write(xml_content)
 
-        print(f"성공: XML 파일이 {xml_path} 에 저장되었습니다.")
+        with open(history_path, "w", encoding="utf-8") as f:
+            f.write(xml_content)
+
+        channels_dir = os.path.join("public", "channels")
+        os.makedirs(channels_dir, exist_ok=True)
+        generate_channel_files(xml_content, channels_dir, today_str)
+
+        generate_index(today_str)
+
+        print(f"성공: {xml_path} 저장 완료")
+        print(f"히스토리: {history_path} 저장 완료")
 
     except Exception as e:
         print(f"오류 발생: {e}")
+        backup = os.path.join("public", "radio.backup.xml")
+        if os.path.exists(backup):
+            shutil.copy2(backup, os.path.join("public", "radio.xml"))
+            print("이전 데이터로 복구했습니다.")
         sys.exit(1)
+
+
+def generate_channel_files(xml_content, channels_dir, today_str):
+    try:
+        import re
+        for ch in CHANNELS:
+            cid = ch['id']
+            channel_def = re.findall(
+                rf'<channel id="{re.escape(cid)}".*?</channel>', xml_content, re.DOTALL
+            )
+            programmes = re.findall(
+                rf'<programme[^>]+channel="{re.escape(cid)}".*?</programme>', xml_content, re.DOTALL
+            )
+            if not programmes:
+                continue
+
+            content = f'<?xml version="1.0" encoding="UTF-8"?>\n<tv date="{today_str.replace("-","")}">\n'
+            if channel_def:
+                content += f"  {channel_def[0]}\n"
+            for p in programmes:
+                content += f"  {p}\n"
+            content += "</tv>"
+
+            with open(os.path.join(channels_dir, f"{cid}.xml"), "w", encoding="utf-8") as f:
+                f.write(content)
+        print("채널별 XML 생성 완료")
+    except Exception as e:
+        print(f"채널별 파일 생성 중 오류 (무시): {e}")
+
+
+def generate_index(today_str):
+    channel_links = "\n".join(
+        f'    <li><a href="channels/{ch["id"]}.xml">{ch["name"]}</a></li>'
+        for ch in CHANNELS
+    )
+    html = f"""<!DOCTYPE html>
+<html lang="ko">
+<head><meta charset="UTF-8"><title>한국 방송 편성표 EPG</title></head>
+<body>
+  <h1>한국 방송 편성표 EPG</h1>
+  <p>기준일: {today_str} | <a href="radio.xml">전체 XMLTV 다운로드</a></p>
+  <h2>채널별</h2>
+  <ul>
+{channel_links}
+  </ul>
+  <h2>히스토리</h2>
+  <p><a href="history/">날짜별 보관함</a></p>
+</body>
+</html>"""
+    with open(os.path.join("public", "index.html"), "w", encoding="utf-8") as f:
+        f.write(html)
+
 
 if __name__ == "__main__":
     generate_radio_xml()
